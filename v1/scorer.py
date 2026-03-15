@@ -110,6 +110,7 @@ class KeywordScorer:
             tuple: (总分, 匹配详情)
         """
         text = f"{title} {abstract}".lower()
+        title_lower = title.lower()
         total_score = 0.0
         matches = {
             'core': [],
@@ -127,7 +128,7 @@ class KeywordScorer:
                 count = text.count(keyword_lower)
                 if count > 0:
                     # 标题匹配权重更高
-                    weight = 3.0 if keyword_lower in title.lower() else 1.5
+                    weight = 3.0 if keyword_lower in title_lower else 1.5
                     score = weight * count
                     total_score += score
                     matches['core'].append({
@@ -170,7 +171,7 @@ class KeywordScorer:
                     matched_keywords.add(keyword)
         
         # 标题加分（标题中出现核心词权重更高）
-        title_bonus = self._calculate_title_bonus(title.lower())
+        title_bonus = self._calculate_title_bonus(title_lower)
         total_score += title_bonus
         
         # 归一化到0-1范围
