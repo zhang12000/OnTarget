@@ -25,6 +25,8 @@ class SmartCache:
     - 自动同步两层缓存
     """
     
+    _BATCH_SIZE = 500
+    
     def __init__(self, db_path='data/literature.db'):
         # 使用项目根目录的绝对路径（core的上级目录）
         if not os.path.isabs(db_path):
@@ -417,6 +419,8 @@ class SmartCache:
                 if not kw_lower:
                     continue
                 
+                kw_prefix = kw_lower + ' '
+                
                 # 将3个查询合并为1个查询，减少数据库往返
                 all_matches = db.query(KeywordIndex).filter(
                     or_(
@@ -431,7 +435,7 @@ class SmartCache:
                     # 根据匹配类型给分
                     if match.keyword == kw_lower:
                         paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 10
-                    elif match.keyword.startswith(kw_lower + ' '):
+                    elif match.keyword.startswith(kw_prefix):
                         paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 5
                     else:
                         paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 3
@@ -554,10 +558,9 @@ class SmartCache:
         db = self._get_session()
         try:
             # 使用 IN 查询一次获取所有文献，避免 N+1 查询
-            BATCH_SIZE = 500
             paper_map = {}
-            for i in range(0, len(paper_hashes), BATCH_SIZE):
-                batch = paper_hashes[i:i + BATCH_SIZE]
+            for i in range(0, len(paper_hashes), self._BATCH_SIZE):
+                batch = paper_hashes[i:i + self._BATCH_SIZE]
                 results = db.query(Paper).filter(Paper.id.in_(batch)).all()
                 for paper in results:
                     paper_map[paper.id] = self._paper_to_dict(paper)
