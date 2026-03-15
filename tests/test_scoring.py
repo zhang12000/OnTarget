@@ -160,6 +160,44 @@ class TestPaperScorerSorting:
         assert scores == sorted(scores, reverse=True)
 
 
+class TestScorerTitleLowerOptimization:
+    """验证 title_lower 优化：混合大小写标题仍能正确计算权重"""
+
+    def setup_method(self):
+        self.scorer = KeywordScorer()
+
+    def test_uppercase_title_gets_higher_weight(self):
+        """大写标题中的关键词应与小写标题权重相同（标题权重更高）"""
+        paper_upper = {'title': 'CANCER Study', 'abstract': 'some content'}
+        paper_lower = {'title': 'cancer study', 'abstract': 'some content'}
+        keywords = ['cancer']
+
+        score_upper = self.scorer.score_papers([paper_upper], keywords)[0]['keywords_score']
+        score_lower = self.scorer.score_papers([paper_lower], keywords)[0]['keywords_score']
+
+        assert score_upper == score_lower
+
+    def test_title_match_beats_abstract_only(self):
+        """关键词在标题中比仅在摘要中得分更高"""
+        paper_in_title = {'title': 'Cancer therapy', 'abstract': 'Some content here.'}
+        paper_in_abstract = {'title': 'Therapy research', 'abstract': 'This covers cancer.'}
+        keywords = ['cancer']
+
+        score_title = self.scorer.score_papers([paper_in_title], keywords)[0]['keywords_score']
+        score_abstract = self.scorer.score_papers([paper_in_abstract], keywords)[0]['keywords_score']
+
+        assert score_title > score_abstract
+
+    def test_mixed_case_keyword_in_title(self):
+        """混合大小写的关键词在标题中同样能被正确识别"""
+        paper = {'title': 'Advanced PROTAC Design', 'abstract': 'No match here.'}
+        keywords = ['protac']
+
+        scored = self.scorer.score_papers([paper], keywords)
+
+        assert scored[0]['keywords_score'] > 0
+
+
 if __name__ == '__main__':
     import pytest
     pytest.main([__file__, '-v'])

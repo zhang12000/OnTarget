@@ -405,6 +405,8 @@ class SmartCache:
         
         db = self._get_session()
         try:
+            from sqlalchemy import or_
+
             # 相关性评分字典: {paper_hash: score}
             paper_scores = {}
             
@@ -416,40 +418,28 @@ class SmartCache:
                 if not kw_lower:
                     continue
                 
+                # 合并三种匹配类型为单次查询，减少数据库往返次数
                 # 1. 精确匹配 (权重: 10分)
-                exact_matches = db.query(KeywordIndex).filter(
-                    KeywordIndex.keyword == kw_lower
+                # 2. 部分匹配 - 开头匹配 (权重: 5分), 如搜索 "cancer" 匹配 "cancer therapy"
+                # 3. 部分匹配 - 包含匹配 (权重: 3分), 如搜索 "therapy" 匹配 "cancer therapy"
+                all_matches = db.query(KeywordIndex).filter(
+                    or_(
+                        KeywordIndex.keyword == kw_lower,
+                        KeywordIndex.keyword.like(f'{kw_lower} %'),
+                        KeywordIndex.keyword.like(f'% {kw_lower} %')
+                    )
                 ).all()
                 
-                for match in exact_matches:
+                for match in all_matches:
                     paper_id = match.paper_id
-                    paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 10
-                    if paper_id not in paper_matched_keywords:
-                        paper_matched_keywords[paper_id] = set()
-                    paper_matched_keywords[paper_id].add(keyword)
-                
-                # 2. 部分匹配 - 开头匹配 (权重: 5分)
-                # 如搜索 "cancer" 匹配 "cancer therapy"
-                prefix_matches = db.query(KeywordIndex).filter(
-                    KeywordIndex.keyword.like(f'{kw_lower} %')
-                ).all()
-                
-                for match in prefix_matches:
-                    paper_id = match.paper_id
-                    paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 5
-                    if paper_id not in paper_matched_keywords:
-                        paper_matched_keywords[paper_id] = set()
-                    paper_matched_keywords[paper_id].add(keyword)
-                
-                # 3. 部分匹配 - 包含匹配 (权重: 3分)
-                # 如搜索 "therapy" 匹配 "cancer therapy"
-                contains_matches = db.query(KeywordIndex).filter(
-                    KeywordIndex.keyword.like(f'% {kw_lower} %')
-                ).all()
-                
-                for match in contains_matches:
-                    paper_id = match.paper_id
-                    paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 3
+                    kw = match.keyword
+                    if kw == kw_lower:
+                        score_delta = 10
+                    elif kw.startswith(kw_lower + ' '):
+                        score_delta = 5
+                    else:
+                        score_delta = 3
+                    paper_scores[paper_id] = paper_scores.get(paper_id, 0) + score_delta
                     if paper_id not in paper_matched_keywords:
                         paper_matched_keywords[paper_id] = set()
                     paper_matched_keywords[paper_id].add(keyword)
@@ -533,23 +523,20 @@ class SmartCache:
             cutoff_date = datetime.now() - timedelta(days=days)
             analysis_cutoff = datetime.now() - timedelta(days=90)
             
-            # 清理文献缓存
-            papers_to_remove = db.query(Paper).filter(Paper.created_at < cutoff_date).all()
-            papers_count = len(papers_to_remove)
-            for paper in papers_to_remove:
-                db.delete(paper)
+            # 清理文献缓存（批量删除，避免逐行加载）
+            papers_count = db.query(Paper).filter(
+                Paper.created_at < cutoff_date
+            ).delete(synchronize_session=False)
             
             # 清理搜索缓存
-            searches_to_remove = db.query(SearchCache).filter(SearchCache.created_at < cutoff_date).all()
-            searches_count = len(searches_to_remove)
-            for search in searches_to_remove:
-                db.delete(search)
+            searches_count = db.query(SearchCache).filter(
+                SearchCache.created_at < cutoff_date
+            ).delete(synchronize_session=False)
             
             # 清理分析缓存（保留更长时间）
-            analysis_to_remove = db.query(AnalysisCache).filter(AnalysisCache.created_at < analysis_cutoff).all()
-            analysis_count = len(analysis_to_remove)
-            for analysis in analysis_to_remove:
-                db.delete(analysis)
+            analysis_count = db.query(AnalysisCache).filter(
+                AnalysisCache.created_at < analysis_cutoff
+            ).delete(synchronize_session=False)
             
             db.commit()
             
