@@ -90,6 +90,9 @@ class PaperFetcher:
             )
         else:
             self.scraper = None
+        
+        # 缓存已编译的正则表达式，避免重复编译
+        self._compiled_patterns = {}
     
     def fetch_pubmed(self, keywords: List[str], days_back: int = 2) -> List[Dict]:
         """从PubMed获取文献"""
@@ -604,7 +607,6 @@ class PaperFetcher:
     
     def _check_keywords_match(self, text: str, keywords: List[str]) -> bool:
         """检查文本是否包含关键词 - 使用更严格的匹配逻辑"""
-        import re
         text_lower = text.lower()
         
         for kw in keywords:
@@ -612,9 +614,10 @@ class PaperFetcher:
             
             # 检查原始关键词
             if len(kw_lower) <= 3:
-                # 短关键词需要更严格的匹配
-                pattern = r'\b' + re.escape(kw_lower) + r'\b'
-                if re.search(pattern, text_lower):
+                # 短关键词需要更严格的匹配，使用缓存的编译正则
+                if kw_lower not in self._compiled_patterns:
+                    self._compiled_patterns[kw_lower] = re.compile(r'\b' + re.escape(kw_lower) + r'\b')
+                if self._compiled_patterns[kw_lower].search(text_lower):
                     return True
             else:
                 # 长关键词可以使用宽松匹配
@@ -622,17 +625,13 @@ class PaperFetcher:
                     return True
             
             # 检查连字符变体（如 TDP-43 vs TDP43）
-            # 对于像TDP43这样的关键词，也检查TDP-43（带连字符）
-            # 对于像TDP-43这样的关键词，也检查TDP43（不带连字符）
             if '-' not in kw_lower and len(kw_lower) > 3:
-                # 尝试在第3-4个字符后插入连字符（常见模式）
                 for pos in [3, 4, 5]:
                     if pos < len(kw_lower):
                         variant = kw_lower[:pos] + '-' + kw_lower[pos:]
                         if variant in text_lower:
                             return True
             elif '-' in kw_lower:
-                # 去掉连字符检查
                 variant = kw_lower.replace('-', '')
                 if variant in text_lower:
                     return True

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set
 
 from models.database import get_db_session, Paper, SearchCache, AnalysisCache, KeywordIndex
+from sqlalchemy import or_
 # V2.6 新增：内存缓存
 from core.memory_cache import get_memory_cache
 
@@ -416,40 +417,24 @@ class SmartCache:
                 if not kw_lower:
                     continue
                 
-                # 1. 精确匹配 (权重: 10分)
-                exact_matches = db.query(KeywordIndex).filter(
-                    KeywordIndex.keyword == kw_lower
+                # 将3个查询合并为1个查询，减少数据库往返
+                all_matches = db.query(KeywordIndex).filter(
+                    or_(
+                        KeywordIndex.keyword == kw_lower,
+                        KeywordIndex.keyword.like(f'{kw_lower} %'),
+                        KeywordIndex.keyword.like(f'% {kw_lower} %')
+                    )
                 ).all()
                 
-                for match in exact_matches:
+                for match in all_matches:
                     paper_id = match.paper_id
-                    paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 10
-                    if paper_id not in paper_matched_keywords:
-                        paper_matched_keywords[paper_id] = set()
-                    paper_matched_keywords[paper_id].add(keyword)
-                
-                # 2. 部分匹配 - 开头匹配 (权重: 5分)
-                # 如搜索 "cancer" 匹配 "cancer therapy"
-                prefix_matches = db.query(KeywordIndex).filter(
-                    KeywordIndex.keyword.like(f'{kw_lower} %')
-                ).all()
-                
-                for match in prefix_matches:
-                    paper_id = match.paper_id
-                    paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 5
-                    if paper_id not in paper_matched_keywords:
-                        paper_matched_keywords[paper_id] = set()
-                    paper_matched_keywords[paper_id].add(keyword)
-                
-                # 3. 部分匹配 - 包含匹配 (权重: 3分)
-                # 如搜索 "therapy" 匹配 "cancer therapy"
-                contains_matches = db.query(KeywordIndex).filter(
-                    KeywordIndex.keyword.like(f'% {kw_lower} %')
-                ).all()
-                
-                for match in contains_matches:
-                    paper_id = match.paper_id
-                    paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 3
+                    # 根据匹配类型给分
+                    if match.keyword == kw_lower:
+                        paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 10
+                    elif match.keyword.startswith(kw_lower + ' '):
+                        paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 5
+                    else:
+                        paper_scores[paper_id] = paper_scores.get(paper_id, 0) + 3
                     if paper_id not in paper_matched_keywords:
                         paper_matched_keywords[paper_id] = set()
                     paper_matched_keywords[paper_id].add(keyword)
@@ -533,23 +518,10 @@ class SmartCache:
             cutoff_date = datetime.now() - timedelta(days=days)
             analysis_cutoff = datetime.now() - timedelta(days=90)
             
-            # 清理文献缓存
-            papers_to_remove = db.query(Paper).filter(Paper.created_at < cutoff_date).all()
-            papers_count = len(papers_to_remove)
-            for paper in papers_to_remove:
-                db.delete(paper)
-            
-            # 清理搜索缓存
-            searches_to_remove = db.query(SearchCache).filter(SearchCache.created_at < cutoff_date).all()
-            searches_count = len(searches_to_remove)
-            for search in searches_to_remove:
-                db.delete(search)
-            
-            # 清理分析缓存（保留更长时间）
-            analysis_to_remove = db.query(AnalysisCache).filter(AnalysisCache.created_at < analysis_cutoff).all()
-            analysis_count = len(analysis_to_remove)
-            for analysis in analysis_to_remove:
-                db.delete(analysis)
+            # 使用批量删除，避免逐条加载到内存
+            papers_count = db.query(Paper).filter(Paper.created_at < cutoff_date).delete(synchronize_session=False)
+            searches_count = db.query(SearchCache).filter(SearchCache.created_at < cutoff_date).delete(synchronize_session=False)
+            analysis_count = db.query(AnalysisCache).filter(AnalysisCache.created_at < analysis_cutoff).delete(synchronize_session=False)
             
             db.commit()
             
@@ -577,14 +549,20 @@ class SmartCache:
     
     def batch_get_papers(self, paper_hashes: List[str]) -> List[Dict]:
         """批量获取缓存的文献"""
+        if not paper_hashes:
+            return []
         db = self._get_session()
         try:
-            papers = []
-            for paper_hash in paper_hashes:
-                paper = db.query(Paper).filter(Paper.id == paper_hash).first()
-                if paper:
-                    papers.append(self._paper_to_dict(paper))
-            return papers
+            # 使用 IN 查询一次获取所有文献，避免 N+1 查询
+            BATCH_SIZE = 500
+            paper_map = {}
+            for i in range(0, len(paper_hashes), BATCH_SIZE):
+                batch = paper_hashes[i:i + BATCH_SIZE]
+                results = db.query(Paper).filter(Paper.id.in_(batch)).all()
+                for paper in results:
+                    paper_map[paper.id] = self._paper_to_dict(paper)
+            # 按原始顺序返回
+            return [paper_map[h] for h in paper_hashes if h in paper_map]
         finally:
             db.close()
     

@@ -1,8 +1,14 @@
 import os
 import json
+import re
 import requests
 from typing import Dict, Optional, List
 from datetime import datetime, timedelta
+
+# 预编译正则表达式，避免每次调用时重新编译
+_RE_PARENS = re.compile(r'\s*\([^)]*\)')
+_RE_BRACKETS = re.compile(r'\s*\[[^\]]*\]')
+_RE_TRAILING_COLON = re.compile(r'\s*:\s*$')
 
 class ImpactFactorFetcher:
     """影响因子查询器"""
@@ -1135,10 +1141,9 @@ class ImpactFactorFetcher:
         
         # 2.5 清理期刊名称后再次尝试精确匹配
         # 移除括号及其内容（如 "Advanced science (Weinheim...)" -> "advanced science"）
-        import re
-        journal_clean = re.sub(r'\s*\([^)]*\)', '', journal_lower).strip()
-        journal_clean = re.sub(r'\s*\[[^\]]*\]', '', journal_clean).strip()
-        journal_clean = re.sub(r'\s*:\s*$', '', journal_clean).strip()  # 移除末尾冒号
+        journal_clean = _RE_PARENS.sub('', journal_lower).strip()
+        journal_clean = _RE_BRACKETS.sub('', journal_clean).strip()
+        journal_clean = _RE_TRAILING_COLON.sub('', journal_clean).strip()
         
         if journal_clean and journal_clean in self.common_journals:
             if_value = self.common_journals[journal_clean]

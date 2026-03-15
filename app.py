@@ -282,38 +282,6 @@ def run_update_task(user_id):
     finally:
         print(f"[后台任务] 函数即将返回，用户ID: {user_id}")
 
-        print(f"[后台任务] 开始为用户 {user_id} 更新文献")
-
-        # 执行更新
-        result = system.run_for_user(user_id)
-
-        # 保存最后更新时间到用户偏好
-        try:
-            system.user_manager.update_preferences(
-                user_id,
-                {
-                    "last_manual_update_at": datetime.now().isoformat(),
-                    "last_manual_update_result": {
-                        "fetched": result.get("fetched", 0),
-                        "from_cache": result.get("from_cache", 0),
-                        "new_analysis": result.get("new_analysis", 0),
-                    },
-                },
-            )
-        except Exception as e:
-            print(f"[后台任务] 保存更新时间失败: {e}", file=sys.stderr)
-
-        with update_tasks_lock:
-            update_tasks[user_id] = {
-                "status": "completed",
-                "result": result,
-                "started_at": update_tasks[user_id]["started_at"],
-                "completed_at": datetime.now(),
-                "message": f"获取完成: {result.get('fetched', 0)} 篇新文献",
-            }
-
-        print(f"[后台任务] 用户 {user_id} 更新完成: {result}")
-
 
 def cleanup_old_tasks():
     with update_tasks_lock:
